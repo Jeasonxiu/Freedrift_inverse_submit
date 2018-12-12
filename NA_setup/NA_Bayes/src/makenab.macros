@@ -1,0 +1,34 @@
+#
+#       Makefile Macro Setup for NAB program and utilities
+#	
+#	Note that you must edit this file to suit your platform 
+#	
+#	Platforms where the code has been successfully run with 
+#	identical results: 
+#
+#		 Platform			Compiler
+#		 SUN (Solaris) 			native 
+#	         SUN (Solaris) 			g77,gcc 
+#	         SUN (running SuSe Linux) 	g77,gcc 
+#	         Compaq Alpha (OSF1 V4.0) 	native compiler
+#                PC  Linux 			g77,gcc compiler
+#	         SGI 				native compiler 
+#
+#
+#------------------------------------------------------------------------------
+#	The following work on a PC running Linux and using GNU compilers
+#------------------------------------------------------------------------------
+#
+CC      = gcc                   # C compiler
+F77     = gfortran-mp-4.8                   # Fortran compiler
+#FFLAGS  = -w -O          # Fortran compiler options
+FFLAGS  = -ffixed-line-length-132 #-e -x           # Fortran compiler options
+#CFLAGS  = -O                    # C compiler options
+CFLAGS  = -c -O                     # C compiler options
+AR      = /usr/bin/ar           # archiver
+#XFLAGS  = -L/usr/X11R6/lib -lX11  # X library flags
+XFLAGS  = -lX11 -dynamic # X library flags
+#MACH    = x86               # platform type (e.g. sun,dec,gnu,sgi)
+MACH    = lin               # platform type (e.g. sun,dec,gnu,sgi)
+
+

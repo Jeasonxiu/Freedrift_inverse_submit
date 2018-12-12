@@ -1,0 +1,792 @@
+c------------------------------------------------------------------------
+c
+c	Subroutine forward_modelling - calculates the array "predicted_
+c				       data" from the model "rmodel"
+c
+c	Note_1: Calls are made to : theo
+c
+c       Note_2: rmodel(1:nlayer): thickness
+c               rmodel(nlayer+1:2*nlayer): velocity at upper interface
+c               rmodel(2*nlayer+1:3*nlayer): velocity at lower interface
+c               rmodel(3*nlayer+1:4*nlayer): Vp/Vs ratio
+c
+c-------------------------------------------------------------------------
+c 
+        subroutine forward_modelling(
+     &          rmodel, moddim, incident_angle, constant_a, 
+     &          constant_c, time_shift, ndata, nwave, fs, 
+     &          q_alpha, q_beta, n, l, m, predicted_data,
+     &          clat, clon, icru, nmod, iproc )
+c 
+        include 'rfi_param.inc'
+c 
+        parameter     ( r0 = 6371.d0 )
+c 
+        real*8          rmodel(maxmoddim)
+c 
+        real*4          incident_angle(maxwave),
+     &                  constant_a(maxwave),
+     &                  constant_c(maxwave),
+     &                  time_shift(maxwave),
+     &                  predicted_data(maxdata,maxwave),
+     &                  q_alpha(maxlayer),
+     &                  q_beta(maxlayer)
+c 
+        integer         ndata(maxwave),
+     &                  n(maxdata), l(maxdata),
+     &                  m(maxdata)
+c my variables
+        integer         iproc, ipr1, ipr2
+        character*7     node_name, clat, clon, lat, lon
+        character*1     typeo, q
+        character*3     mot
+        character*200   str, model, input, mdir, prem, cdir
+ 	character*200	path
+        character*256   ifile, ofile, str1, str2, cmd
+        integer         ifanis, ifdeck, nm, nic, noc, im
+        parameter       ( maxmod=450 )
+        parameter       ( nmin = 0)
+        parameter       ( lmin = 0)
+        parameter       ( lmax = 300 )
+        parameter       ( fmin = 0.0)
+        parameter       ( fmax = 50.0 )
+        integer*8       norder, lorder, eigid, nrow
+        integer*4       ncol, mmax
+        real*8          tref, phvel, grvel, attn
+        real*8          dmi1, dmi2, mrho, mvpv, mvsv
+        real*8          ray, U, dU, V, dV, P, dP, A2
+        real*8          A(lmax),T(lmax),y2(lmax),nA(lmax),nT(lmax),
+     &                  A0(maxdata),T0(maxdata),nA0(maxdata),nT0(maxdata)
+        real*8          prad(maxmod), prho(maxmod),
+     &                  pvpv(maxmod), pvsv(maxmod),
+     &                  pqka(maxmod), pqmu(maxmod),
+     &                  pvph(maxmod), pvsh(maxmod),
+     &                  peta(maxmod)
+        real*8          nrad(maxmod), nrho(maxmod),
+     &                  nvpv(maxmod), nvsv(maxmod),
+     &                  nqka(maxmod), nqmu(maxmod),
+     &                  nvph(maxmod), nvsh(maxmod),
+     &                  neta(maxmod)
+        real*8          trad(maxmod), trho(maxmod),
+     &                  tvpv(maxmod), tvsv(maxmod),
+     &                  tqka(maxmod), tqmu(maxmod),
+     &                  tvph(maxmod), tvsh(maxmod),
+     &                  teta(maxmod)
+        real*8          vs(maxmoddim), fp(maxmoddim), fr(maxmoddim),
+     &                  dd(maxmoddim), dep(maxmoddim), vsa(maxmoddim),
+     &                  fvp(maxmoddim), fro(maxmoddim), vso(maxmoddim)
+        integer*4       icru, imoh, nc, ic, nmod
+        real*8          crad(70), crho(70), cvpv(70), cvsv(70), cerr(70),
+     &                  cqmu(70), cqka(70), cvph(70), cvsh(70), ceta(70)
+        real*8          llat, llon, ldep
+        character*15    clay
+        real*8          t1(9), t2(9), t3(9), t4(9), x, y, z
+c
+c------ read PREM
+c
+	
+        mdir='/home/ucfbabe/Amplitude_Inversion_splines/NA/data/rfi_files/NA_SRF/mineos-1.0.2/'
+        prem='prem_noocean'
+c       write(path,'(a,"models/",a,".txt")'), adjustl(mdir), trim(prem)
+        
+	path = "/home/ucfbabe/Amplitude_Inversion_splines/NA/data/rfi_files/NA_SRF/mineos-1.0.2/models/prem_noocean.txt"
+	write(*,*) "CICCIO", path
+
+	open(100, file=path, status='old')
+        read(100,'(a)') str
+        read(100,*) ifanis, tref, ifdeck
+        read(100,*) nm, nic, noc
+        do i=1,nm
+          read(100,*) prad(i), prho(i), pvpv(i), pvsv(i), pqka(i),
+     &          pqmu(i), pvph(i), pvsh(i), peta(i)
+        enddo
+        close(100)
+	write(*,*) "CICCIO1"
+c ----- anisotropic? 1:yes, 0:no
+        ifanis=0
+cc ----- crustal model? nmod=1: LITHO1.0, nmod=2: CRUST1.0, nmod=3: WCUS, nmod=4: SAFR
+cc ----- crustal structure
+c        if (nmod.eq.1) then
+cc ----- LITHO1.0
+c          cdir='/home/ucfbabe/Amplitude_Inversion_splines/NA/data/rfi_files/NA_SRF/mineos-1.0.2/models/LITHO1.0/'
+c          write(path,'(a,a,i5,a)') trim(cdir), 'node', icru, '.model'
+c          open(1, file=path, status='old')
+c          read(1,*) str1, str2, nc
+c          ic=0
+c          do i=1,nc
+c            read(1,*,end=97) trad(i), trho(i), tvpv(i), tvsv(i), tqka(i), 
+c     &          tqmu(i), tvph(i), tvsh(i), teta(i), clay
+c            if (clay(1:5).eq."CRUST") then
+c              ic=ic+1
+c              crad(6-ic+1)=trad(i)/1000.d0
+c              crho(6-ic+1)=trho(i)/1000.d0
+c              cvpv(6-ic+1)=tvpv(i)/1000.d0
+c              cvsv(6-ic+1)=tvsv(i)/1000.d0
+c              cqka(6-ic+1)=tqka(i)
+c              cqmu(6-ic+1)=tqmu(i)
+c              cvph(6-ic+1)=tvpv(i)/1000.d0
+c              cvsh(6-ic+1)=tvsv(i)/1000.d0
+c              ceta(6-ic+1)=1.d0
+cc              write(*,*) ic, 6-ic+1, crad(6-ic+1), cvsv(6-ic+1)
+c            endif
+c          enddo
+c  97    close(1)
+c          if (ic.ne.6) then
+c            write(*,*) "Problem with crustal parameters: ",
+c     &          ic, " layers"
+c          endif
+c          crad(1)=0.d0
+c        elseif (nmod.eq.2) then
+cc ----- CRUST1.0
+c          cdir='/home/ucfbabe/Amplitude_Inversion_splines/NA/data/rfi_files/NA_SRF/mineos-1.0.2/models/CRUST1.0/'
+c          write(path,'(a,a)') trim(cdir), 'crust1.bnds'
+c          open(1, file=path, status='old')
+c          write(path,'(a,a)') trim(cdir), 'crust1.rho'
+c          open(2, file=path, status='old')
+c          write(path,'(a,a)') trim(cdir), 'crust1.vp'
+c          open(3, file=path, status='old')
+c          write(path,'(a,a)') trim(cdir), 'crust1.vs'
+c          open(4, file=path, status='old')
+c          do i=1,64800
+c            read(1,*,end=98) t1(1:9)
+c            read(2,*,end=98) t2(1:9)
+c            read(3,*,end=98) t3(1:9)
+c            read(4,*,end=98) t4(1:9)
+c            if (i.eq.icru) then
+c              crad(1)=0.d0
+c              crad(2:3)=dabs(t1(7))
+c              crad(4:5)=dabs(t1(8))
+c              crad(6)=dabs(t1(9))
+c              crho(1:2)=t2(6)
+c              crho(3:4)=t2(7)
+c              crho(5:6)=t2(8)
+c              cvpv(1:2)=t3(6)
+c              cvpv(3:4)=t3(7)
+c              cvpv(5:6)=t3(8)
+c              cvsv(1:2)=t4(6)
+c              cvsv(3:4)=t4(7)
+c              cvsv(5:6)=t4(8)
+c              exit
+c            endif
+c          enddo
+c  98      close(1)
+c          close(2)
+c          close(3)
+c          close(4)
+c          ic=6
+c        elseif (nmod.eq.3) then
+cc ----- WCUS
+c          cdir='/home/ucfbabe/Amplitude_Inversion_splines/NA/data/rfi_files/NA_SRF/mineos-1.0.2/models/WCUS/'
+c          write(path,'(a,"list.txt")') trim(cdir)
+c          open(100, file=path, status='old')
+c          do i=1,6803
+c            read(100,*) lon, lat
+c            if (i.eq.icru) then
+c              close(100)
+c              exit
+c            endif
+c          enddo
+c          write(path,'(a,a,"_",a,".mod.1")') trim(cdir),
+c     &          trim(adjustl(lon)), trim(adjustl(lat))
+c          open(100, file=path, status='old')
+cc ----- ignore header
+c          read(100,*) x, y, z
+cc ----- ignore 2 sedimentary layers
+c          read(100,*) x, y, z
+c          read(100,*) x, y, z
+c          do i=1,70
+c            read(100,*,end=99) crad(i), cvsv(i), cerr(i)
+c            if (crad(i).eq.crad(i-1)) imoh=i-1
+c          enddo
+c  99    close(100)
+cc ----- "move" top of crust to the surface
+c          crad(1)=0.d0
+c          ic=i-1
+c        elseif (nmod.eq.4) then
+cc ----- SAFR
+c          cdir='/home/ucfbabe/Amplitude_Inversion_splines/NA/data/rfi_files/NA_SRF/mineos-1.0.2/models/'
+c          write(path,'(a,a)') trim(cdir),'kaapvaal.txt'
+c          open(100, file=path, status='old')
+cc ----- ignore header
+c          read(100,*) str1
+c          do i=1,48
+c            read(100,*) crad(i), cvpv(i), cvsv(i), crho(i), cqka(i), cqmu(i)
+c          enddo
+c          close(100)
+c          ic=i-1
+c        endif
+c
+c------ convert 'rmodel'
+c 
+        nlayer=moddim/4
+c
+c        vso(1)=cvsv(ic)
+        do i=1,nlayer
+          dd(i)=rmodel(i)
+          vs(i)=rmodel(nlayer+i)
+          fp(i)=rmodel(2*nlayer+i)
+          fr(i)=rmodel(3*nlayer+i)
+c          vso(i+1)=vs(i)
+        enddo
+c        if ((nmod.eq.1).or.(nmod.eq.2)) then
+cc ----- LITHO1.0/CRUST1.0
+c          dep(1)=crad(6)
+c        elseif (nmod.eq.3) then
+cc ----- WCUS
+c          dep(1)=crad(imoh)
+c        elseif (nmod.eq.4) then
+cc ----- SAFR
+c          dep(1)=crad(icru)
+c        endif
+        dep(1)=0.d0
+        vsa(1)=vs(1)
+        fvp(1)=fp(1)
+        fro(1)=fr(1)
+        do i=2,nlayer
+          dep(2*i-2:2*i-1)=dd(i-1)
+          vsa(2*i-2)=vs(i-1)
+          vsa(2*i-1)=vs(i)
+          fvp(2*i-2)=fp(i-1)
+          fvp(2*i-1)=fp(i)
+          fro(2*i-2)=fr(i-1)
+          fro(2*i-1)=fr(i)
+        enddo
+        i=nlayer
+        dep(2*i)=dd(i)
+        vsa(2*i)=vs(i)
+        fvp(2*i)=fp(i)
+        fro(2*i)=fr(i)
+
+	write(*,*) "CICCIO2"
+c
+c------ find index in PREM corresponding to bottom of last NA layer
+c
+        do i=1,nm
+          if (dabs(r0-prad(nm-i)/1000.d0-dep(2*nlayer)).le.0.5d0) then
+            im=nm-i-1
+            exit
+          endif
+        enddo
+c
+c------ create new input model
+c ----- part of the model following PREM`s parametrisation 
+        do i=1,im
+          nrad(i)=prad(i)
+c ----- make sure depth of top of PREM part matches
+c ----- depth of upper bound of last NA discontinuity
+          if (i.eq.im) nrad(i)=(r0-dep(2*nlayer))*1000.d0
+          nrho(i)=prho(i)
+          nvpv(i)=pvpv(i)
+          nvsv(i)=pvsv(i)
+          nqka(i)=pqka(i)
+          nqmu(i)=pqmu(i)
+          nvph(i)=pvpv(i)
+          nvsh(i)=pvsv(i)
+          neta(i)=1.d0
+        enddo
+c
+c ----- CRUST1.0/LITHO1.0
+c
+        if ((nmod.eq.1).or.(nmod.eq.2)) then
+c ----- NA part of the model
+          do i=1,2*nlayer
+c            if (mod(i,2).eq.1) write(*,*) sngl(dep(2*nlayer-i+1)), '-',
+c     &          sngl(dep(2*nlayer-i)), ': ', sngl(vsa(2*nlayer-i+1))
+            nrad(im+i)=(r0-dep(2*nlayer-i+1))*1000.d0
+            if (mod(i,2).eq.1) then
+              dmi1=100.d0
+              dmi2=100.d0
+              ipr1=0
+              ipr2=0
+              do j=im,nm
+                if (dabs(r0-prad(j)/1000.d0-dep(2*nlayer-i+1)).lt.dmi1) then
+                  dmi1=dabs(r0-prad(j)/1000.d0-dep(2*nlayer-i+1))
+                  ipr1=j
+                endif
+                if (dabs(r0-prad(j)/1000.d0-dep(2*nlayer-i)).lt.dmi2) then
+                  dmi2=dabs(r0-prad(j)/1000.d0-dep(2*nlayer-i))
+                  ipr2=j
+                endif
+              enddo
+	write(*,*) "CICCIO3"
+c ----- always consider the top/bottom of lower/upper discontinuity
+              if (prad(ipr1).eq.prad(ipr1+1)) ipr1=ipr1+1
+              if (prad(ipr2).eq.prad(ipr2-1)) ipr2=ipr2-1
+c ----- average PREM within NA layer
+              mvpv=sum(pvpv(ipr1:ipr2))/(ipr2-ipr1+1)
+              mrho=sum(prho(ipr1:ipr2))/(ipr2-ipr1+1)
+              mvsv=sum(pvsv(ipr1:ipr2))/(ipr2-ipr1+1)
+            endif
+cc            nrho(im+i)=vsa(2*nlayer-i+1)/fro(2*nlayer-i+1)*1000.d0
+c            if (i.ge.2*nlayer-1) then
+c              nrho(im+i)=0.75d0*vsa(2*nlayer-i+1)*1000.d0
+c              nvpv(im+i)=1.78d0*vsa(2*nlayer-i+1)*1000.d0
+cc              nrho(im+i)=vsa(2*nlayer-i+1)/fro(2*nlayer-i+1)*1000.d0
+cc              nvpv(im+i)=vsa(2*nlayer-i+1)/fvp(2*nlayer-i+1)*1000.d0
+c            else
+              nrho(im+i)=mrho+mrho*0.40d0*(vsa(2*nlayer-i+1)*1000.d0-mvsv)/mvsv
+              nvpv(im+i)=mvpv+mvpv*0.59d0*(vsa(2*nlayer-i+1)*1000.d0-mvsv)/mvsv
+c            endif
+            nvsv(im+i)=vsa(2*nlayer-i+1)*1000.d0
+            nqka(im+i)=57823.d0
+            if (dep(2*nlayer-i+1).le.80.d0) then
+              nqmu(im+i)=600.d0
+            elseif ((dep(2*nlayer-i+1).gt.80.d0).and.
+     &          (dep(2*nlayer-i+1).le.220.d0)) then
+              nqmu(im+i)=80.d0
+            elseif ((dep(2*nlayer-i+1).gt.220.d0).and.
+     &          (dep(2*nlayer-i+1).le.670.d0)) then
+              nqmu(im+i)=143.d0
+            endif
+            nvph(im+i)=nvpv(im+i)
+            nvsh(im+i)=nvsv(im+i)
+            neta(im+i)=1.d0
+c            write(*,*) im+i, sngl(r0-nrad(im+i)/1000.d0),
+c     &          sngl(nvpv(im+i)/1000.d0), sngl(nvsv(im+i)/1000.d0)
+          enddo
+c ----- crustal part of the model
+c          write(*,*) 'crust'
+c          do i=1,ic
+c            nrad(im+2*nlayer+i)=(r0-crad(ic-i+1))*1000.d0
+c            if (i.eq.1) nrad(im+2*nlayer+i)=(r0-dep(1))*1000.d0
+c            nrho(im+2*nlayer+i)=crho(ic-i+1)*1000.d0
+c            nvpv(im+2*nlayer+i)=cvpv(ic-i+1)*1000.d0
+c            nvsv(im+2*nlayer+i)=cvsv(ic-i+1)*1000.d0
+c            nqka(im+2*nlayer+i)=57823.d0
+c            nqmu(im+2*nlayer+i)=600.d0
+c            nvph(im+2*nlayer+i)=nvpv(im+2*nlayer+i)
+c            nvsh(im+2*nlayer+i)=nvsv(im+2*nlayer+i)
+c            neta(im+2*nlayer+i)=1.d0
+c            write(*,*) im+2*nlayer+i, sngl(r0-nrad(im+2*nlayer+i)/1000.d0),
+c     &          sngl(nvpv(im+2*nlayer+i)/1000.d0), sngl(nvsv(im+2*nlayer+i)/1000.d0)
+c          enddo
+c          k=im+2*nlayer+ic+1
+          k=im+2*nlayer+1
+c
+c ----- WCUS
+c
+        elseif (nmod.eq.3) then
+c ----- NA part of the model
+          do i=1,2*nlayer
+c            if (mod(i,2).eq.1) write(*,*) sngl(dep(2*nlayer-i+1)), '-',
+c     &          sngl(dep(2*nlayer-i)), ': ', sngl(vsa(2*nlayer-i+1))
+            nrad(im+i)=(r0-dep(2*nlayer-i+1))*1000.d0
+            nrho(im+i)=1.227d0+1.53d0*vsa(2*nlayer-i+1)-0.837d0*vsa(2*nlayer-i+1)**2+
+     &          +0.207d0*vsa(2*nlayer-i+1)**3-0.0166d0*vsa(2*nlayer-i+1)**4
+            nvpv(im+i)=vsa(2*nlayer-i+1)*1750.d0
+            nvsv(im+i)=vsa(2*nlayer-i+1)*1000.d0
+            nqka(im+i)=57823.d0
+            if (dep(2*nlayer-i+1).le.80.d0) then
+              nqmu(im+i)=600.d0
+            elseif ((dep(2*nlayer-i+1).gt.80.d0).and.
+     &          (dep(2*nlayer-i+1).le.220.d0)) then
+              nqmu(im+i)=80.d0
+            elseif ((dep(2*nlayer-i+1).gt.220.d0).and.
+     &          (dep(2*nlayer-i+1).le.670.d0)) then
+              nqmu(im+i)=143.d0
+            endif
+            nvph(im+i)=nvpv(im+i)
+            nvsh(im+i)=nvsv(im+i)
+            neta(im+i)=1.d0
+c            write(*,*) im+i, sngl(r0-nrad(im+i)/1000.d0),
+c     &          sngl(nvpv(im+i)/1000.d0), sngl(nvsv(im+i)/1000.d0)
+          enddo
+c ----- crustal part of the model
+c          write(*,*) 'crust'
+          do i=1,imoh
+            nrad(im+2*nlayer+i)=(r0-crad(imoh-i+1))*1000.d0
+            dmin=100.d0
+            iprm=0
+            do j=im,nm
+              if (dabs(r0-prad(j)/1000.d0-crad(imoh-i+1)).lt.dmin) then
+                dmin=dabs(r0-prad(j)/1000.d0-crad(imoh-i+1))
+                iprm=j
+              endif
+            enddo
+c ----- always consider the top of the discontinuity
+            if (prad(iprm).eq.prad(iprm+1)) iprm=iprm+1
+            nrho(im+i)=prho(iprm)+prho(iprm)*0.40*(cvsv(imoh-i+1)*1000.d0-pvsv(iprm))/pvsv(iprm)
+            nvpv(im+i)=pvpv(iprm)+pvpv(iprm)*0.59*(cvsv(imoh-i+1)*1000.d0-pvsv(iprm))/pvsv(iprm)
+            nvsv(im+2*nlayer+i)=cvsv(imoh-i+1)*1000.d0
+            nqka(im+2*nlayer+i)=57823.d0
+            nqmu(im+2*nlayer+i)=600.d0
+            nvph(im+2*nlayer+i)=nvpv(im+2*nlayer+i)
+            nvsh(im+2*nlayer+i)=nvsv(im+2*nlayer+i)
+            neta(im+2*nlayer+i)=1.d0
+c            write(*,*) im+2*nlayer+i,sngl(r0-nrad(im+2*nlayer+i)/1000.d0),
+c     &        sngl(nvpv(im+2*nlayer+i)/1000.d0),sngl(nvsv(im+2*nlayer+i)/1000.d0)
+            k=im+2*nlayer+imoh+1
+          enddo
+c
+	write(*,*) "CICCIO4"
+c ----- SAFR
+c
+        elseif (nmod.eq.4) then
+c ----- NA part of the model
+          k=im+1
+          do j=1,2*nlayer,2
+c            write(*,*) sngl(dep(2*nlayer-j+1)), '-', sngl(dep(2*nlayer-j)),
+c     &          ': ', sngl(vsa(2*nlayer-j+1))
+c ----- case >95 km (outside of model)
+            if (dep(2*nlayer-j+1).ge.95.d0) then
+              nrad(k)=(r0-dep(2*nlayer-j+1))*1000.d0
+              nrad(k+1)=(r0-dep(2*nlayer-j))*1000.d0
+              nrho(k:k+1)=crho(ic)*1000.d0
+              nvpv(k:k+1)=cvpv(ic)*1000.d0
+              nvsv(k:k+1)=vsa(2*nlayer-j+1)*1000.d0
+              nqka(k:k+1)=57823.d0
+              nqmu(k:k+1)=cqmu(ic)
+              nvph(k:k+1)=nvpv(k:k+1)
+              nvsh(k:k+1)=nvsv(k:k+1)
+              neta(k:k+1)=1.d0
+c              write(*,*) k, sngl(r0-nrad(k)/1000.d0), sngl(nvsv(k)/1000.d0),
+c     &          sngl(nvpv(k)/1000.d0), sngl(nqmu(k))
+c              write(*,*) k+1, sngl(r0-nrad(k+1)/1000.d0), sngl(nvsv(k+1)/1000.d0),
+c     &          sngl(nvpv(k)/1000.d0), sngl(nqmu(k))
+              k=k+2
+            else
+c ----- top of NA layer
+              nrad(k)=(r0-dep(2*nlayer-j+1))*1000.d0
+              nrho(k)=crho(45)*1000.d0
+              nvpv(k)=cvpv(45)*1000.d0
+              nvsv(k)=vsa(2*nlayer-j+1)*1000.d0
+              nqka(k)=cqka(45)
+              nqmu(k)=cqmu(45)
+              nvph(k)=nvpv(k)
+              nvsh(k)=nvsv(k)
+              neta(k)=1.d0
+c              write(*,*) k, sngl(r0-nrad(k)/1000.d0), sngl(nvsv(k)/1000.d0),
+c     &          sngl(nvpv(k)/1000.d0), sngl(nqmu(k))
+              k=k+1
+              do i=1,ic-icru
+                if ((crad(ic-i+1).le.dep(2*nlayer-j+1)).and.
+     &                  (crad(ic-i+1).ge.dep(2*nlayer-j))) then
+c ----- within NA layer
+                  nrad(k)=(r0-crad(ic-i+1))*1000.d0
+                  nrho(k)=crho(ic-i+1)*1000.d0
+                  nvpv(k)=cvpv(ic-i+1)*1000.d0
+                  nvsv(k)=vsa(2*nlayer-j+1)*1000.d0
+                  nqka(k)=cqka(ic-i+1)
+                  nqmu(k)=cqmu(ic-i+1)
+                  nvph(k)=nvpv(k)
+                  nvsh(k)=nvsv(k)
+                  neta(k)=1.d0
+c                  write(*,*) k, sngl(r0-nrad(k)/1000.d0), sngl(nvsv(k)/1000.d0),
+c     &                    sngl(nvpv(k)/1000.d0), sngl(nqmu(k))
+                  k=k+1
+                endif
+              enddo
+            endif
+          enddo
+c ----- crustal part of the model
+          do i=ic-icru+1,ic
+            nrad(k)=(r0-crad(ic-i+1))*1000.d0
+            nrho(k)=crho(ic-i+1)*1000.d0
+            nvpv(k)=cvpv(ic-i+1)*1000.d0
+            nvsv(k)=cvsv(ic-i+1)*1000.d0
+            nqka(k)=cqka(ic-i+1)
+            nqmu(k)=cqmu(ic-i+1)
+            nvph(k)=nvpv(k)
+            nvsh(k)=nvsv(k)
+            neta(k)=1.d0
+c            write(*,*) k, sngl(r0-nrad(k)/1000.d0), sngl(nvsv(k)/1000.d0),
+c     &          sngl(nvpv(k)/1000.d0), sngl(nqmu(k))
+            k=k+1
+          enddo
+        endif
+        k=k-1
+c write model
+        call hostnm(node_name)
+        if (iproc.eq.99) then
+          write(model, '(a)') 'final'
+        else
+          write(model, '(a,".",i2.2)') trim(node_name), iproc
+        endif
+        write(path,'(a,"models/",a,".txt")') trim(mdir), trim(model)
+        open(101, file=path, status='unknown')
+        write(101,'(a100)') adjustl(str)
+        write(101,'(i4,1x,f10.5,1x,i2)') ifanis, tref, ifdeck
+        write(101,'(i6,1x,i3,1x,i3)') k, nic, noc
+        do i=1,k
+          write(101,201) nrad(i), nrho(i), nvpv(i), nvsv(i), nqka(i),
+     &          nqmu(i), nvph(i), nvsh(i), neta(i)
+        enddo
+        close(101)
+c        stop
+        if (iproc.eq.99) return
+c get max. mode order
+        nmax = maxval(n)
+        mmax = maxval(m)
+c 
+c------ run MINEOS
+c for spheroidals
+c write mineos input file
+        do iw=1,nwave
+          write(ifile, '(a,"minos_bran.",a,".",i2.2,".in")') trim(mdir),
+     &          trim(node_name), iproc
+          open(11, file=ifile, status='unknown')
+          write(11,'(a,a,a,a)') trim(mdir), 'models/', trim(model), '.txt'
+          write(11,'(a,a,a,a)') trim(mdir), 'OUTPUT/', trim(model), '_sph.txt'
+          write(11,'(a,a,a,a)') trim(mdir), 'OUTPUT/', trim(model), '_sph.bin'
+          write(11,'(a)') '1.0e-10 500.0'
+          write(11,'(i1)') 3
+          write(11,101) lmin, lmax, fmin, fmax, nmin, nmax
+          close(11)
+c run 'minos_bran'
+          write(ofile, '(a,"minos_bran.",a,".",i2.2,".out")') trim(mdir),
+     &          trim(node_name), iproc
+          str1='/home/ucfbabe/Amplitude_Inversion_splines/NA/data/rfi_files/NA_SRF/mineos-1.0.2/minos_bran<'
+          str2='>'
+          cmd=trim(str1)//trim(ifile)//trim(str2)//trim(ofile)
+          call system(cmd)
+c write eigcon input file
+          write(ifile, '(a,"eigcon.",a,".",i2.2,".in")') trim(mdir),
+     &          trim(node_name), iproc
+          open(12, file=ifile, status='unknown')
+          write(12,'(i1)') 3
+          write(12,'(a,a,a,a)') trim(mdir), 'models/', trim(model), '.txt'
+          write(12,'(f6.1)') r0
+          write(12,'(a,a,a,a)') trim(mdir), 'OUTPUT/', trim(model), '_sph.txt'
+          write(12,'(a,a,a,a)') trim(mdir), 'OUTPUT/', trim(model), '_sph.bin'
+          write(12,'(a,a,a,a)') trim(mdir), 'OUTPUT/', trim(model), '_sph'
+          close(12)
+c run 'eigcon'
+          write(ofile, '(a,"eigcon.",a,".",i2.2,".out")') trim(mdir),
+     &          trim(node_name), iproc
+          str1='/home/ucfbabe/Amplitude_Inversion_splines/NA/data/rfi_files/NA_SRF/mineos-1.0.2/eigcon<'
+          str2='>'
+          cmd=trim(str1)//trim(ifile)//trim(str2)//trim(ofile)
+          call system(cmd)
+c write MINEOS output in ASCII format
+          write(ofile,'(a,a,".sh")') trim(mdir), trim(model)
+          open(13, file=ofile, status='unknown')
+          write(str1,'(a,"OUTPUT/",a,"_sph")') trim(mdir), trim(model)
+          write(str2,'(a,"OUTPUT/",a,"_sph.eigen.asc")') trim(mdir),
+     &          trim(model)
+          str='eigen2asc'
+          write(13,102) trim(mdir), trim(str),
+     &          nmin, nmax, lmin, lmax, trim(str1), trim(str2)
+          close(13)
+          call system('chmod 751 '//ofile)
+          call system(ofile)
+c for toroidals if needed
+          if ( mmax.gt.1 ) then
+          write(ifile, '(a,"minos_bran.",a,".",i2.2,".in")') trim(mdir),
+     &          trim(node_name), iproc
+          open(11, file=ifile, status='unknown')
+          write(11,'(a,a,a,a)') trim(mdir), 'models/', trim(model), '.txt'
+          write(11,'(a,a,a,a)') trim(mdir), 'OUTPUT/', trim(model), '_tor.txt'
+          write(11,'(a,a,a,a)') trim(mdir), 'OUTPUT/', trim(model), '_tor.bin'
+          write(11,'(a)') '1.0e-10 500.0'
+          write(11,'(i1)') 2
+          write(11,101) lmin, lmax, fmin, fmax, nmin, nmax
+          close(11)
+c run 'minos_bran'
+          write(ofile, '(a,"minos_bran.",a,".",i2.2,".out")') trim(mdir),
+     &          trim(node_name), iproc
+          str1='/home/ucfbabe/Amplitude_Inversion_splines/NA/data/rfi_files/NA_SRF/mineos-1.0.2/minos_bran<'
+          str2='>'
+          cmd=trim(str1)//trim(ifile)//trim(str2)//trim(ofile)
+          call system(cmd)
+c write eigcon input file
+          write(ifile, '(a,"eigcon.",a,".",i2.2,".in")') trim(mdir),
+     &          trim(node_name), iproc
+          open(12, file=ifile, status='unknown')
+          write(12,'(i1)') 2
+          write(12,'(a,a,a,a)') trim(mdir), 'models/', trim(model), '.txt'
+          write(12,'(f6.1)') r0
+          write(12,'(a,a,a,a)') trim(mdir), 'OUTPUT/', trim(model), '_tor.txt'
+          write(12,'(a,a,a,a)') trim(mdir), 'OUTPUT/', trim(model), '_tor.bin'
+          write(12,'(a,a,a,a)') trim(mdir), 'OUTPUT/', trim(model), '_tor'
+          close(12)
+c run 'eigcon'
+          write(ofile, '(a,"eigcon.",a,".",i2.2,".out")') trim(mdir),
+     &          trim(node_name), iproc
+          str1='/home/ucfbabe/Amplitude_Inversion_splines/NA/data/rfi_files/NA_SRF/mineos-1.0.2/eigcon<'
+          str2='>'
+          cmd=trim(str1)//trim(ifile)//trim(str2)//trim(ofile)
+          call system(cmd)
+c write MINEOS output in ASCII format
+          write(ofile,'(a,a,".sh")') trim(mdir), trim(model)
+          open(13, file=ofile, status='unknown')
+          write(str1,'(a,"OUTPUT/",a,"_tor")') trim(mdir), trim(model)
+          write(str2,'(a,"OUTPUT/",a,"_tor.eigen.asc")') trim(mdir),
+     &          trim(model)
+          str='eigen2asc'
+          write(13,102) trim(mdir), trim(str),
+     &          nmin, nmax, lmin, lmax, trim(str1), trim(str2)
+          close(13)
+          call system('chmod 751 '//ofile)
+          call system(ofile)
+          endif
+c
+c------ calculate theoretical amplitude
+c 
+c          do i=1,ndata(iw)
+          do i=2,lmax
+c            if (m(i).eq.1) then
+cc LHZ
+c              q='S'
+c              mot='sph'
+c            elseif (m(i).eq.2) then
+cc LHR
+c              q='S'
+c              mot='sph'
+c            elseif (m(i).eq.3) then
+cc LHT
+c              q='T'
+c              mot='tor'
+c            endif
+c read eigenfunction from NA model
+c            write(ofile,'(a,a,a,a,a,a,a,a,i0.7,".",i0.7,".ASC")')
+c     &          trim(mdir), 'OUTPUT/', trim(model), '_', mot,
+c     &          '.eigen.asc/', q, '.', n(i), l(i)
+            write(ofile,'(a,a,a,a,i0.7,".",i0.7,".ASC")')
+     &          trim(mdir),'OUTPUT/',trim(model),'_sph.eigen.asc/S.',0,i
+            ofile=trim(ofile)
+            open(13, file=ofile, status='unknown')
+c            read(13,202) norder, lorder, typeo, eigid, T(i),
+            read(13,202) norder, lorder, typeo, eigid, T(i-1),
+     &          phvel, grvel, attn, nrow, ncol
+c            if ((m(i).eq.1).or.(m(i).eq.2)) then
+c              read(13,203) ray, U, dU, V, dV, P, dP
+c            else
+c              read(13,204) ray, U, dU
+c            endif
+            read(13,203) ray, U, dU, V, dV, P, dP
+            close(13)
+c            if (m(i).eq.2) then
+c              A(i)=-V/sqrt(grvel)
+c            else
+c              A(i)=U/sqrt(grvel)
+c            endif
+            A(i-1)=U/sqrt(grvel)
+          enddo
+c ----- sorting tables for increasing period
+          nA(1:lmax-1)=A(lmax-1:1:-1)
+          nT(1:lmax-1)=T(lmax-1:1:-1)
+c ----- get PREM for modes of interest only
+          q='S'
+          mot='sph'
+          do i=1,ndata(iw)
+c read eigenfunction from PREM model
+            write(ofile,'(a,a,a,a,a,a,a,a,i0.7,".",i0.7,".ASC")')
+     &          trim(mdir), 'OUTPUT/', trim(prem), '_', mot,
+     &          '.eigen.asc/', q, '.', n(i), l(i)
+            ofile=trim(ofile)
+            open(12, file=ofile, status='unknown')
+            read(12,202) norder, lorder, typeo, eigid, T0(i),
+     &          phvel, grvel, attn, nrow, ncol
+            read(12,203) ray, U, dU, V, dV, P, dP
+            close(12)
+            A0(i)=U/sqrt(grvel)
+          enddo
+c ----- sorting tables for increasing period
+          nA0(1:ndata(iw))=A0(ndata(iw):1:-1)
+          nT0(1:ndata(iw))=T0(ndata(iw):1:-1)
+c ----- interpolation
+          call spline(nT(1:lmax-1),nA(1:lmax-1),lmax-1,1.e30,1.e30,y2)
+          do i=1,ndata(iw)
+            call splint(nT(1:lmax-1),nA(1:lmax-1),
+     &          y2(1:lmax-1),lmax-1,nT0(i),A2)
+c ----- ratio NA over PREM
+            predicted_data(ndata(iw)-i+1,iw)=abs(A2/nA0(i))
+          enddo
+        enddo
+  101   format(i1,1x,i4,1x,f4.1,1x,f4.1,1x,i1,1x,i1)
+  102   format(a,a,1x,i1,1x,i1,1x,i1,1x,i4,1x,a,1x,a)
+  201   format(f8.0,3f9.2,2f9.1,2f9.2,f9.5)
+  202   format(i8,1x,i8,1x,a1,1x,i8,1x,4(f16.5,1x),i8,1x,i4)
+  203   format(f8.0,6e15.7)
+  204   format(f8.0,2e15.7)
+c 
+        return
+        end
+cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        SUBROUTINE spline(x,y,n,yp1,ypn,y2)
+        INTEGER n,NMAX
+        REAL*8 yp1,ypn,x(n),y(n),y2(n)
+        PARAMETER (NMAX=500)
+c Given arrays x(1:n) and y(1:n) containing a tabulated function, i.e., 
+c yi = f(xi), with x1 < x2 < ::: < xN, and given values yp1 and ypn for
+c the first derivative of the interpolating function at points 1 and n,
+c respectively, this routine returns an array y2(1:n) of length n which
+c contains the second derivatives of the interpolating function at the
+c tabulated points xi. If yp1 and/or ypn are equal to 1e30 or
+c larger, the routine is signaled to set the corresponding boundary
+c condition for a natural spline, with zero second derivative on that
+c boundary.
+c Parameter: NMAX is the largest anticipated value of n.
+        INTEGER i,k
+        REAL p,qn,sig,un,u(NMAX)
+        if (yp1.gt..99e30) then
+c The lower boundary condition is set either to be "natural"
+          y2(1)=0.d0
+          u(1)=0.d0
+        else
+c or else to have a specified first derivative
+          y2(1)=-0.5d0
+          u(1)=(3.d0/(x(2)-x(1)))*((y(2)-y(1))/(x(2)-x(1))-yp1)
+        endif
+c This is the decomposition loop of the tridiagonal algorithm. y2 and u
+c are used for temporary storage of the decomposition factors
+        do 11, i=2,n-1
+          sig=(x(i)-x(i-1))/(x(i+1)-x(i-1))
+          p=sig*y2(i-1)+2.d0
+          y2(i)=(sig-1.d0)/p
+          u(i)=(6.d0*((y(i+1)-y(i))/(x(i+1)-x(i))-(y(i)-y(i-1))
+     &          /(x(i)-x(i-1)))/(x(i+1)-x(i-1))-sig*u(i-1))/p
+  11    enddo
+        if (ypn.gt..99e30) then
+c The lower boundary condition is set either to be "natural"
+          qn=0.d0
+          un=0.d0
+        else
+c or else to have a specified first derivative
+          qn=0.5d0
+          un=(3.d0/(x(n)-x(n-1)))*(ypn-(y(n)-y(n-1))/(x(n)-x(n-1)))
+        endif
+c This is the backsubstitution loop of the tridiagonal algorithm
+        y2(n)=(un-qn*u(n-1))/(qn*y2(n-1)+1.d0)
+        do 12, k=n-1,1,-1
+          y2(k)=y2(k)*y2(k+1)+u(k)
+  12    enddo
+        return
+        END
+ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        SUBROUTINE splint(xa,ya,y2a,n,x,y)
+        INTEGER n
+        REAL*8 x,y,xa(n),y2a(n),ya(n)
+c Given the arrays xa(1:n) and ya(1:n) of length n, which tabulate a 
+c function (with the xai's in order), and given the array y2a(1:n),
+c which is the output from spline above, and given a value of x, this
+c routine returns a cubic-spline interpolated value y.
+        INTEGER k,khi,klo
+        REAL*8 a,b,h
+c We will find the right place in the table by means of bisection. This
+c is optimal if sequential calls to this routine are at random values of
+c x. If sequential calls are in order, and closely spaced, one would do
+c better to store previous values of klo and khi and test if they remain
+c appropriate on the next call.
+        klo=1
+        khi=n
+  1     if (khi-klo.gt.1) then
+          k=(khi+klo)/2
+          if(xa(k).gt.x)then
+            khi=k
+          else
+            klo=k
+          endif
+        goto 1
+        endif
+c klo and khi now bracket the input value of x.
+        h=xa(khi)-xa(klo)
+c The xa's must be distinct
+        if (h.eq.0.d0) pause 'bad xa input in splint'
+c Cubic spline polynomial is now evaluated
+        a=(xa(khi)-x)/h
+        b=(x-xa(klo))/h
+        y=a*ya(klo)+b*ya(khi)+
+     &          ((a**3-a)*y2a(klo)+(b**3-b)*y2a(khi))*(h**2)/6.d0
+        return
+        END

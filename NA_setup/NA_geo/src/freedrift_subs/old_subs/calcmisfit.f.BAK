@@ -1,0 +1,43 @@
+c-------------------------------------------------------------------------
+c
+c	Subroutine calcmisfit - calculates a misfit value between 
+c				observed data and predicted data
+c				plus model roughness
+c
+c	Note: Calls no other routines
+c
+c------------------------------------------------------------------------
+c
+	subroutine calcmisfit(
+     &		predicted_data, observed_data, ndata, 
+     &		weight, nwave, misfitval )
+c
+c
+	include 'rfi_param.inc'
+c
+c
+	real*4		predicted_data(maxdata,maxwave),
+     &			observed_data(maxdata,maxwave),
+     &			weight(maxwave),
+     &			misfitval
+c
+	integer         ndata(maxwave)
+c
+c						misfit between observed and
+c						predicted
+	misfitval=0.0
+c
+	do iw=1,nwave
+c
+	  do i=1,ndata(iw)
+c
+	    aval=(observed_data(i,iw)-predicted_data(i,iw))
+     &			* weight(iw)
+	    misfitval=misfitval+aval**2
+c
+	  end do
+c
+	end do
+c
+	return
+	end

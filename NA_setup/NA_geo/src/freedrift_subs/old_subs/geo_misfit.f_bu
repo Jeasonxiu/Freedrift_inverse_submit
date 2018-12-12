@@ -1,0 +1,142 @@
+C-------------------------------------------------------------------------
+c
+c	Subroutine geo_misfit - calculates a misfit value between 
+c				observed data and predicted data
+c				three times, calculating vels for
+c				wind,  o_i geo,from the other two
+c				This new version allows for full circle angles
+c				Misift set within the loop, 
+c				default value = 10*vector
+c
+c	Note: Calls no other routines
+c
+c------------------------------------------------------------------------
+c 
+        subroutine geo_misfit(
+     &          model, 
+     & 		uwind, vwind, wind_mag, wind_sig,
+     & 		uo_i, vo_i, o_i_mag, o_i_sig,
+     & 		ugeo, vgeo, geo_mag, geo_sig,
+     & 		hifc, 
+     & 		beta_a, beta_i, beta_g, 
+     &          misfitval )
+c
+c
+c
+        real            model(4)
+     	real   		uwind, vwind, wind_mag, wind_sig
+     	real   		uo_i, vo_i, o_i_mag, o_i_sig
+     	real   		ugeo, vgeo, geo_mag, geo_sig
+     	real   		uwind_calc, vwind_calc, wind_mag_calc
+     	real   		uo_i_calc, vo_i_calc, o_i_mag_calc
+     	real   		ugeo_calc, vgeo_calc, geo_mag_calc
+     	real   		hifc
+        real 		beta_a, beta_i, beta_g, beta_fb
+     	real            fb_ratio, misfitval 
+     	real            misfit_o, misfit_g
+     	real            misfit_a, misfit_fb
+        real    	y1, y11, y12
+        real    	y2, y21, y22
+        real    	y_mag, y_arg
+        real    	thA, thO, thAO
+        real    	Ro, Na2, Capa, Copo, rhoi, bigp
+        real            atmo_stressx, ocn_stressx, cor_tiltx, tot_mtm_x
+        real            atmo_stressy, ocn_stressy, cor_tilty, tot_mtm_y
+
+        parameter       ( pi = 3.141259E0 )
+        parameter       ( rhoi = 917.0E0 )
+        parameter       ( bigp = 1.0e7 )
+        parameter       ( Na2_scale = 0.01 )
+c 
+        integer        conv, it, bflag
+
+c Set up no convergence flag
+	bflag = 0
+
+c
+c						misfit between observed and
+c						predicted
+c model contains:
+c 1: Na2- no longer scaled by wind_mag to get the correct Ua
+c 2: Rossby radius, Na independant - independent of hifc
+c 3: thO
+c 4: thA - thO
+
+c	write(*,*)' model = ',model
+
+c When using Ro, Ro = Ro*hifc
+
+	thA = model(3) + model(4)
+	thO = model(3)
+	thAO= model(4)
+	Ro  = model(2)*hifc
+	Na2 = model(1)
+c	write(*,*)' Na2 = ',Na2
+c	write(*,*)' Ro  = ',Ro
+
+	Copo = rhoi / model(2)
+	Capa = model(1) * Copo
+
+c Start with wind mag from uo_i and ugeo (ugeo is uo_i^geo)
+
+    y11 = -1.0e0*o_i_mag/Na2 * (COS(thO-thA)*uo_i - SIN(thO-thA)*vo_i)
+    y12 = -o_i_mag/Na2 * (COS(thO-thA)*vo_i + SIN(thO-thA)*uo_i)
+
+    y21 = -Ro/Na2 * (-SIN(-thA)*ugeo - COS(-thA)*vgeo)
+    y22 = -Ro/Na2 * (-SIN(-thA)*vgeo + COS(-thA)*ugeo)
+
+    y1 = y11 + y21
+    y2 = y12 + y22
+    y_mag = sqrt(hypot(y1,y2))
+    y_arg = ATAN2(y2,y1)
+
+    uwind_calc = y_mag*COS(y_arg)
+    vwind_calc = y_mag*SIN(y_arg)
+
+	misfit_a = (uwind - uwind_calc)**2 + (vwind - vwind_calc)**2
+	misfit_a = misfit_a * beta_a
+
+c Now for i_o
+
+    y11 = -wnd_mag*Na2 * (COS(thA-thO)*uwnd - SIN(thA-thO)*vwnd)
+    y12 = -wnd_mag*Na2 * (COS(thA-thO)*vwnd + SIN(thA-thO)*uwnd)
+
+    y21 = -Ro * (-SIN(-thO)*ugeo - COS(-thO)*vgeo)
+    y22 = -Ro * (-SIN(-thO)*vgeo + COS(-thO)*ugeo)
+
+    y1 = y11 + y21
+    y2 = y12 + y22
+    y_mag = sqrt(hypot(y1,y2))
+    y_arg = ATAN2(y2,y1)
+
+    uo_i_calc = y_mag*COS(y_arg)
+    vo_i_calc = y_mag*SIN(y_arg)
+
+	misfit_o = (uo_i - uo_i_calc)**2 + (vo_i - vo_i_calc)**2
+	misfit_o = misfit_o * beta_i
+
+c Finally geo
+
+    y11 = wnd_mag*Na2/Ro * (-SIN(thA)*uwnd - COS(thA)*vwnd)
+    y12 = wnd_mag*Na2/Ro * (-SIN(thA)*vwnd + COS(thA)*uwnd)
+
+    y11 = o_i_mag/Ro * (-SIN(thO)*uo_i - COS(thO)*vo_i)
+    y12 = o_i_mag/Ro * (-SIN(thO)*vo_i + COS(thO)*uo_i)
+
+    y1 = y11 + y21
+    y2 = y12 + y22
+
+    ugeo_calc = y1
+    vgeo_calc = y2
+
+	misfit_g = (ugeo - ugeo_calc)**2 + (vgeo - vgeo_calc)**2
+	misfit_g = misfit_g * beta_g
+
+	misfitval = misfit_o/o_i_sig**2 +
+     &              misfit_a/wind_sig**2 +
+     &              misfit_g/geo_sig**2 
+
+c note that the errors are dimensional now
+ 
+        return
+        end
